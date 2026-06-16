@@ -6,11 +6,11 @@
     <title>Payment Integration & QR Code Generator</title>
 
     <!--
-      Client-side QR code library (loaded from a CDN).
-      This is the static/browser version of the Flask app (web_app.py),
-      so it can be hosted for free on GitHub Pages with a live link.
+      Client-side QR code library (qrcode-generator by Kazuhiko Arase).
+      Bundled locally (docs/qrcode.js) so there is no external CDN dependency
+      and it reliably encodes long payment URLs at high error correction.
     -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="qrcode.js"></script>
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -187,6 +187,17 @@
         const MERCHANT_ID = "MERCHANT_12345";
         const SECRET_KEY = "sk_test_demo_key_not_real";
 
+        // Generate a UUID. Uses crypto.randomUUID when available,
+        // with a fallback for older browsers.
+        function genUUID() {
+            if (crypto.randomUUID) return crypto.randomUUID();
+            return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+                const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+                const v = c === "x" ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
         // Compute a SHA-256 hash in the browser using the Web Crypto API.
         // Returns a 64-char hex string - same idea as Python's hashlib.sha256.
         async function sha256Hex(message) {
@@ -196,46 +207,63 @@
             return bytes.map(b => b.toString(16).padStart(2, "0")).join("");
         }
 
+        // Render a QR code into the container as an <img>.
+        // Uses the qrcode-generator API: type 0 = auto-pick the smallest
+        // version that fits the data, "H" = high error correction.
+        function renderQR(container, text) {
+            container.innerHTML = "";
+            const qr = qrcode(0, "H");
+            qr.addData(text);
+            qr.make();
+            // createImgTag(cellSize, margin) returns an <img> HTML string.
+            container.innerHTML = qr.createImgTag(5, 8);
+            const img = container.querySelector("img");
+            if (img) {
+                img.style.width = "200px";
+                img.style.height = "200px";
+                img.alt = "Payment QR Code";
+            }
+        }
+
         // Handle form submission
         document.getElementById("paymentForm").addEventListener("submit", async (e) => {
             e.preventDefault(); // don't reload the page
 
-            const amount = document.getElementById("amount").value;
-            const currency = document.getElementById("currency").value;
-            const description = document.getElementById("description").value;
+            try {
+                const amount = document.getElementById("amount").value;
+                const currency = document.getElementById("currency").value;
+                const description = document.getElementById("description").value;
 
-            // 1. Generate a unique transaction ID
-            const transactionId = crypto.randomUUID();
-            const createdAt = new Date().toISOString();
+                // 1. Generate a unique transaction ID
+                const transactionId = genUUID();
+                const createdAt = new Date().toISOString();
 
-            // 2. Generate a secure token (proves the data wasn't tampered with)
-            const token = await sha256Hex(`${transactionId}${amount}${SECRET_KEY}`);
+                // 2. Generate a secure token (proves the data wasn't tampered with)
+                const token = await sha256Hex(`${transactionId}${amount}${SECRET_KEY}`);
 
-            // 3. Build the payment URL
-            const paymentUrl =
-                `${PAYMENT_GATEWAY_BASE_URL}?txn_id=${transactionId}` +
-                `&amount=${amount}&currency=${currency}` +
-                `&merchant=${MERCHANT_ID}&token=${token}`;
+                // 3. Build the payment URL
+                const paymentUrl =
+                    `${PAYMENT_GATEWAY_BASE_URL}?txn_id=${transactionId}` +
+                    `&amount=${amount}&currency=${currency}` +
+                    `&merchant=${MERCHANT_ID}&token=${token}`;
 
-            // 4. Render the QR code (clear any previous one first)
-            const qrContainer = document.getElementById("qrcode");
-            qrContainer.innerHTML = "";
-            new QRCode(qrContainer, {
-                text: paymentUrl,
-                width: 200,
-                height: 200,
-                correctLevel: QRCode.CorrectLevel.H
-            });
+                // 4. Render the QR code from the payment URL
+                renderQR(document.getElementById("qrcode"), paymentUrl);
 
-            // 5. Fill in the transaction details
-            document.getElementById("r_txn").textContent = transactionId.slice(0, 8) + "...";
-            document.getElementById("r_amount").textContent = amount + " " + currency;
-            document.getElementById("r_desc").textContent = description;
-            document.getElementById("r_time").textContent = createdAt.slice(0, 19);
-            document.getElementById("r_token").textContent = token.slice(0, 16) + "...";
+                // 5. Fill in the transaction details
+                document.getElementById("r_txn").textContent = transactionId.slice(0, 8) + "...";
+                document.getElementById("r_amount").textContent = amount + " " + currency;
+                document.getElementById("r_desc").textContent = description;
+                document.getElementById("r_time").textContent = createdAt.slice(0, 19);
+                document.getElementById("r_token").textContent = token.slice(0, 16) + "...";
 
-            // Reveal the result section
-            document.getElementById("result").style.display = "block";
+                // Reveal the result section
+                document.getElementById("result").style.display = "block";
+            } catch (err) {
+                // Surface any failure instead of silently doing nothing
+                alert("Could not generate QR code: " + err.message);
+                console.error(err);
+            }
         });
     </script>
 </body>
